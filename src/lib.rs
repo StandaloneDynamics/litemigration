@@ -1,78 +1,76 @@
-/*!
-This crate allows for the creation of embedded migrations.
-Provides supoort for Sqlite and Posgresql.
-Only forward migrations are performed.
-# Usage
-```
-[dependencies]
-litemigrations = {version = "1", features=["postgres", "sqlite"]}
-```
+mod database;
+mod error;
+mod migration;
 
+use database::Database;
 
-# Example
-```rust
-let path = "sqlite://litemigration.db";
-Sqlite::create_database(&path).await.unwrap();
-let mut conn = SqliteConnection::connect(path).await.unwrap();
+pub use error::Error;
+pub use migration::Migration;
 
-
-// Create a struct that which contains an existing db connection
-let mut lite = LiteSqlite{conn: &mut conn};
-
-// Create a migration table to keep track of migrations
-lite.create_table().await;
-
-// Add the database changes as a list of schemas
-let changes = vec![
-    Schema{id: 2, query: "CREATE TABLE cats(id INTEGER PRIMARY KEY AUTOINCREMENT, name VARCHAR)"},
-    Schema{id: 3, query: "INSERT INTO cats(name) VALUES('John')"},
-    Schema{id: 4, query: "INSERT INTO cats(name) VALUES('Peter')"},
-];
-
-// This loops through each of the changes and applies them.
-lite.add_schema(&changes).await;
-```
- */
-
-
-use thiserror::Error;
-
-/// Struct containing a database migration and its version
-pub mod schema;
-
-/// Module supporting Postgres migrations
-#[cfg(feature = "postgres")]
-pub mod postgres;
-
-/// Module supporting Sqlite migrations
 #[cfg(feature = "sqlite")]
-pub mod sqlite;
+pub use database::sqlite::SqliteDatabase;
 
+#[cfg(feature = "postgres")]
+pub use database::pg::PostgresDatabase;
 
-/// Enum of possible error messages
-#[derive(Error, Debug)]
-pub enum LiteMigrationError{
-    #[error("Unable to create migration table")]
-    DatabaseError(sqlx::Error),
-    #[error("Unable to add migration {value:?}: {error}")]
-    MigrationError{
-        value: i32,
-        error: sqlx::Error
-    },
+/// Run database migrations against a database backend
 
+/// Struct that is generic over [`Database`] which allows
+/// for any database engine to work with it
+pub struct Migrator<D>
+where
+    D: Database,
+{
+    database: D,
 }
 
-/// Trait implementing methods to perform migrations.
-pub trait Migration{
-    /// Create initial migration table to keep track of migrations
-    async fn create_table(&mut self) -> Result<(), LiteMigrationError>;
+impl<D> Migrator<D>
+where
+    D: Database,
+{
+    /// Create a new migrator instance containing database connection
+    pub fn new(database: D) -> Self {
+        Self { database }
+    }
+    /// Applies pending migrations or
+    /// creates migration table and applies all migrations.
+    pub fn migrate(&mut self, migrations: &[Migration]) -> Result<(), Error> {
+        self.database.create_migration_table()?;
+        self.database.apply_migrations(migrations)?;
+        Ok(())
+    }
+}
 
-    /// Check of the database and migrations table exists
-    async fn exists(&mut self) -> bool;
-    
-    /// apply a schema list of migrations
-    async fn add_schema(&mut self, changes: &Vec<schema::Schema>) -> Result<(), LiteMigrationError>;
-    
-    /// Obtain the latest migration version
-    async fn latest_migration(&mut self) -> Result<i32, LiteMigrationError>;
+#[cfg(test)]
+mod tests {
+    use super::database::sqlite::SqliteDatabase;
+    use super::error::Error;
+    use super::migration::Migration;
+    use super::Migrator;
+    use std::fs;
+    use tempfile;
+
+    #[test]
+    fn test_sqlite() -> Result<(), Error> {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let db_path = temp_dir.path().join("test.db");
+        let mut connection = rusqlite::Connection::open(&db_path)?;
+
+        let m_1 = Migration::new(1, "create users", "CREATE TABLE users(name VARCHAR)");
+        let m_2 = Migration::new(
+            2,
+            "insert user",
+            r#"INSERT into users(name) VALUES("test")"#,
+        );
+        let migrations = vec![m_1, m_2];
+
+        let sqlite = SqliteDatabase::new(&mut connection);
+        let mut migrator = Migrator::new(sqlite);
+        migrator.migrate(&migrations)?;
+
+        let _ = connection.close();
+        let _ = fs::remove_file(db_path);
+
+        Ok(())
+    }
 }

@@ -1,14 +1,20 @@
 [package]
 name = "litemigration"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
-thiserror = "1"
-sqlx = { version = "0.8", features = ["postgres", "sqlite"] }
+rusqlite = {version = "0.40.2", optional = true}
+postgres = { version = "0.19", optional = true }
+log = "0.4"
+
+[features]
+default = ["sqlite", "postgres"]
+
+sqlite = ["dep:rusqlite"]
+postgres = ["dep:postgres"]
 
 
 [dev-dependencies]
-sqlx = { version = "0.8", features = ["postgres", "sqlite", "runtime-tokio-native-tls"] }
-tokio = { version = "1", features = ["rt", "macros"] }
-
+tempfile = "3"
+testcontainers-modules = { version = "0.15.0", features = ["blocking", "postgres"] }
